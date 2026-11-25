@@ -18,6 +18,7 @@ import logging
 import random
 import signal
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import httpx
@@ -73,6 +74,16 @@ class Dispatcher:
     def __init__(self, state: State, carrier: CarrierClient):
         self.state, self.carrier = state, carrier
         self.settings: Settings = state.settings
+        self._sent: deque[float] = deque()   # send times of the last second, for the peak meter
+        self.peak_per_second = 0
+
+    def _note_send(self) -> None:
+        """Measure what we really put on the wire: the most submits in any 1 s window."""
+        now = time.monotonic()
+        self._sent.append(now)
+        while self._sent[0] <= now - 1.0:
+            self._sent.popleft()
+        self.peak_per_second = max(self.peak_per_second, len(self._sent))
 
     # ------------------------------------------------------------------ claim
     async def claim(self, message_id: str):
@@ -92,13 +103,18 @@ class Dispatcher:
 
     # ---------------------------------------------------------------- process
     async def process(self, item: QueueItem) -> str:
-        """Returns 'skipped', 'submitted', 'retry', 'failed'."""
+        """Claim and submit. Returns 'skipped', 'submitted', 'retry', 'failed' or 'error'."""
         row = await self.claim(item.message_id)
         if row is None:
             return "skipped"
+        return await self.submit_claimed(row)
+
+    async def submit_claimed(self, row) -> str:
+        item = QueueItem(str(row["tenant_id"]), str(row["id"]))
         try:
             payload = {"message_id": str(row["id"]), "to": row["to_number"], "from": row["sender"],
                        "text": row["text"], "encoding": row["encoding"]}
+            self._note_send()
             result = await self.carrier.submit(payload)
             if result.kind == "ok":
                 await self._on_submitted(row, result.carrier_id)
@@ -184,38 +200,44 @@ class Dispatcher:
         sem = asyncio.Semaphore(self.settings.worker_concurrency)
         tasks: set[asyncio.Task] = set()
         helpers = [asyncio.create_task(self._mover_loop(stop)),
-                   asyncio.create_task(self._reconcile_loop(stop))]
+                   asyncio.create_task(self._reconcile_loop(stop)),
+                   asyncio.create_task(self._peak_log_loop(stop))]
         log.info("worker started: limit %s submits/s, concurrency %s",
                  self.settings.carrier_rps, self.settings.worker_concurrency)
         queue = self.state.queue
         while not stop.is_set():
             await sem.acquire()
-            token = None
             try:
                 if not await queue.has_work():
                     sem.release()
                     await asyncio.sleep(0.05)
                     continue
-                # 1) get permission from the global limiter, 2) pick the next message.
-                ok, value = await queue.acquire_slot(self.settings.carrier_rps)
-                if not ok:
-                    sem.release()
-                    await asyncio.sleep(min(int(value), 250) / 1000)
-                    continue
-                token = value
+                # 1) pick the next message (round-robin between tenants) and claim it.
+                #    The loop holds ONE message at a time, so a campaign cannot pile up
+                #    in this process and delay a message that arrives later.
                 item = await queue.dequeue()
-                if item is None:
-                    await queue.release_slot(token)
+                row = await self.claim(item.message_id) if item else None
+                if row is None:
                     sem.release()
                     continue
+                # 2) take a slot from the global limiter as the LAST step before the HTTP
+                #    call, so the time between "permission" and "request on the wire" is
+                #    tiny and the carrier never sees a burst caused by our own delays.
+                while not stop.is_set():
+                    ok, value = await queue.acquire_slot(self.settings.carrier_rps)
+                    if ok:
+                        break
+                    await asyncio.sleep(min(int(value), 250) / 1000)
+                else:  # shutting down while waiting: hand the message back
+                    await self.release_claim(row["id"])
+                    sem.release()
+                    break
             except Exception:
                 log.exception("dispatch loop error")
-                if token:
-                    await queue.release_slot(token)
                 sem.release()
                 await asyncio.sleep(1)
                 continue
-            task = asyncio.create_task(self._run_item(item, token, sem))
+            task = asyncio.create_task(self._run_claimed(row, sem))
             tasks.add(task)
             task.add_done_callback(tasks.discard)
 
@@ -225,11 +247,17 @@ class Dispatcher:
         for h in helpers:
             h.cancel()
 
-    async def _run_item(self, item: QueueItem, token: str, sem: asyncio.Semaphore) -> None:
+    async def release_claim(self, message_id) -> None:
+        """Undo a claim that was never used (shutdown). The reconciler would also fix it."""
+        await self.state.pool.execute(
+            "UPDATE messages SET lease_until = NULL, attempts = attempts - 1 "
+            "WHERE id = $1 AND status IN ('ACCEPTED', 'QUEUED')", message_id)
+        await self.state.queue.enqueue([(str(await self.state.pool.fetchval(
+            "SELECT tenant_id FROM messages WHERE id = $1", message_id)), str(message_id))])
+
+    async def _run_claimed(self, row, sem: asyncio.Semaphore) -> None:
         try:
-            outcome = await self.process(item)
-            if outcome == "skipped":
-                await self.state.queue.release_slot(token)  # nothing was sent: give the slot back
+            await self.submit_claimed(row)
         finally:
             sem.release()
 
@@ -240,6 +268,14 @@ class Dispatcher:
             except Exception:
                 log.exception("move_due failed")
             await asyncio.sleep(0.2)
+
+    async def _peak_log_loop(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            await asyncio.sleep(10)
+            if self.peak_per_second:
+                log.info("carrier submits: peak %d in any 1 s window during the last 10 s (limit %d)",
+                         self.peak_per_second, self.settings.carrier_rps)
+            self.peak_per_second = 0
 
     async def _reconcile_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():

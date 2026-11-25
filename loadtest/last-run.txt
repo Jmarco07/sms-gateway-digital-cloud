@@ -1,0 +1,27 @@
+====================================================================
+LOAD TEST REPORT  (run 00bd07e0)
+====================================================================
+Messages: 10000 ShopFast + 278 Acme OTP
+Total time until every message was final: 284.8 s
+ShopFast: nothing left to submit after 271.9 s -> 36.4 messages/s accepted by the carrier (average)
+Carrier submit calls (all outcomes, incl. retries and OTP): 10696 -> average 39.3 calls/s during the submit phase (limit 50/s)
+Carrier 429 (over its 50/s limit): 8   503: 314   400: 112   timeouts: 104   re-submits de-duplicated: 104
+DLRs sent: 11190   duplicates: 1024   early (before submit response): 493
+
+OTP (Acme Bank) time from ACCEPTED to SUBMITTED while the campaign ran:
+  samples 274   p50 413 ms   p95 619 ms   max 4437 ms   (never submitted: 4)
+
+Final states:
+  ShopFast  DELIVERED 8879  UNDELIVERED 705  EXPIRED 308  FAILED 108   (retried at least once: 403)
+  Acme      DELIVERED 239  UNDELIVERED 25  EXPIRED 10  FAILED 4   (retried at least once: 12)
+
+Billing check:
+  Acme      PASS  balance 45.9920 = opening 50.0000 - ledger 4.0080  [ok]
+            charged once each: yes   double charge/refund entries: 0   refunds only for FAILED (4): yes   spent this run: 1.6440
+  ShopFast  PASS  balance 57.4880 = opening 200.0000 - ledger 142.5120  [ok]
+            charged once each: yes   double charge/refund entries: 0   refunds only for FAILED (108): yes   spent this run: 59.3520
+====================================================================
+
+Gateway-side measurement for the same run (worker log, "peak submits in any 1 s window",
+sampled every 10 s): 41 in 31 windows, 42 once, 43 once. The carrier limit is 50/s and
+our configured limit is 40/s.

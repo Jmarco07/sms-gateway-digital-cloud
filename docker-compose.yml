@@ -13,7 +13,7 @@ x-gateway-env: &gateway-env
   DLR_SECRET: ${DLR_SECRET:-dev-dlr-secret}
   ADMIN_KEY: ${ADMIN_KEY:-dev-admin-key}
   CARRIER_URL: http://carrier:9000
-  CARRIER_RPS: ${CARRIER_RPS:-45}
+  CARRIER_RPS: ${CARRIER_RPS:-40}
   ACME_API_KEY: ${ACME_API_KEY:-acme-demo-key-0001}
   SHOPFAST_API_KEY: ${SHOPFAST_API_KEY:-shopfast-demo-key-0001}
 

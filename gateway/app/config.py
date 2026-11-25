@@ -16,7 +16,7 @@ class Settings:
     admin_key: str
     carrier_url: str
     # Global limit we allow ourselves towards the carrier. The carrier limit is 50/s;
-    # we stay a little below it because network jitter can reorder arrivals.
+    # we stay 20% below it: a short event-loop pause releases several granted requests at once.
     carrier_rps: int
     carrier_timeout: float          # seconds before we give up on a submit
     max_attempts: int               # submit attempts before a message is FAILED
@@ -39,7 +39,7 @@ class Settings:
             dlr_secret=_env("DLR_SECRET", "dev-dlr-secret"),
             admin_key=_env("ADMIN_KEY", "dev-admin-key"),
             carrier_url=_env("CARRIER_URL", "http://localhost:9000"),
-            carrier_rps=int(_env("CARRIER_RPS", "45")),
+            carrier_rps=int(_env("CARRIER_RPS", "40")),
             carrier_timeout=float(_env("CARRIER_TIMEOUT", "3.0")),
             max_attempts=int(_env("MAX_ATTEMPTS", "6")),
             backoff_base=float(_env("BACKOFF_BASE", "1.0")),

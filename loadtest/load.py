@@ -136,12 +136,17 @@ async def run(args) -> int:
                     otp_errors.append(f"{r.status_code} {r.text[:120]}")
                 await asyncio.sleep(max(0.0, 1.0 - (time.monotonic() - started)))
 
+        submit_done_at: list[float] = []     # first moment nothing is waiting to be submitted
+
         async def all_final(headers, expected: int | None) -> None:
             while True:
                 counts = (await c.get("/v1/stats", headers=headers, params={"created_from": since})).json()["counts"]
                 total, done = sum(counts.values()), sum(counts[s] for s in FINAL)
                 if done == total and (expected is None or total >= expected):
                     return
+                if headers is shop and not submit_done_at and total >= n and \
+                        counts["ACCEPTED"] + counts["QUEUED"] == 0:
+                    submit_done_at.append(time.monotonic() - t0)
                 if headers is shop:
                     print(f"[{time.monotonic() - t0:6.1f}s] ShopFast final {done}/{total}   "
                           f"submitted {counts['SUBMITTED']}  queued {counts['QUEUED']}")
@@ -183,16 +188,14 @@ async def run(args) -> int:
         print(f"Messages: {len(shop_msgs)} ShopFast + {len(acme_msgs)} Acme OTP")
         print(f"Total time until every message was final: {total_seconds:.1f} s")
 
-        submitted = [ts(m["submitted_at"]) for m in shop_msgs if m["submitted_at"]]
-        created = [ts(m["created_at"]) for m in shop_msgs]
-        if submitted:
-            window = (max(submitted) - min(created)).total_seconds()
-            print(f"ShopFast: all accepted by the carrier within {window:.1f} s "
-                  f"-> {len(submitted) / window:.1f} messages/s accepted (average)")
+        submit_phase = submit_done_at[0] if submit_done_at else total_seconds
+        accepted_by_carrier = sum(1 for m in shop_msgs if m["submitted_at"])
+        print(f"ShopFast: nothing left to submit after {submit_phase:.1f} s "
+              f"-> {accepted_by_carrier / submit_phase:.1f} messages/s accepted by the carrier (average)")
         if carrier_stats:
             calls = carrier_stats.get("submits", 0)
-            print(f"Carrier submit calls (all outcomes): {calls}"
-                  + (f" -> average {calls / window:.1f} calls/s over the submit window" if submitted else ""))
+            print(f"Carrier submit calls (all outcomes, incl. retries and OTP): {calls} "
+                  f"-> average {calls / submit_phase:.1f} calls/s during the submit phase (limit 50/s)")
             print(f"Carrier 429 (over its 50/s limit): {carrier_stats.get('429', 0)}   "
                   f"503: {carrier_stats.get('503', 0)}   400: {carrier_stats.get('400', 0)}   "
                   f"timeouts: {carrier_stats.get('timeouts', 0)}   "
