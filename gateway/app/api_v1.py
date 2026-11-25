@@ -138,10 +138,11 @@ async def ledger(request: Request, tenant: dict = Depends(current_tenant),
 
 
 @router.get("/v1/stats")
-async def stats(request: Request, tenant: dict = Depends(current_tenant)):
+async def stats(request: Request, tenant: dict = Depends(current_tenant),
+                created_from: datetime | None = Query(default=None)):
     state = get_state(request)
     async with state.pool.acquire() as conn:
-        counts = (await queries.status_counts(conn, tenant["id"])).get(
+        counts = (await queries.status_counts(conn, tenant["id"], created_from)).get(
             tenant["id"], {s: 0 for s in queries.STATUSES})
         money = (await queries.tenant_money(conn, tenant["id"]))[0]
     return {"balance_micros": money["balance_micros"], "counts": counts}

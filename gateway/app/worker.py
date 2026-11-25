@@ -82,7 +82,7 @@ class Dispatcher:
                       updated_at = now()
                 WHERE id = $1 AND status IN ('ACCEPTED', 'QUEUED')
                   AND (lease_until IS NULL OR lease_until < now())
-                  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= now() + interval '1 second')
             RETURNING id, tenant_id, to_number, sender, text, encoding, attempts""",
             message_id, float(self.settings.lease_seconds))
 

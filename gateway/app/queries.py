@@ -62,13 +62,19 @@ async def get_message(conn: asyncpg.Connection, message_id, tenant_id=None) -> d
     return message
 
 
-async def status_counts(conn: asyncpg.Connection, tenant_id=None) -> dict:
+async def status_counts(conn: asyncpg.Connection, tenant_id=None,
+                        created_from: datetime | None = None) -> dict:
     """{tenant_id: {status: count}}"""
-    sql = "SELECT tenant_id, status, count(*) AS n FROM messages"
-    args = []
+    where, args = [], []
     if tenant_id is not None:
-        sql += " WHERE tenant_id = $1"
         args.append(tenant_id)
+        where.append(f"tenant_id = ${len(args)}")
+    if created_from is not None:
+        args.append(created_from)
+        where.append(f"created_at >= ${len(args)}")
+    sql = "SELECT tenant_id, status, count(*) AS n FROM messages"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " GROUP BY tenant_id, status"
     out: dict = {}
     for r in await conn.fetch(sql, *args):

@@ -106,7 +106,7 @@ services:
   loadtest:
     profiles: ["tools"]
     build: ./gateway
-    command: ["python", "/loadtest/load.py"]
+    entrypoint: ["python", "/loadtest/load.py"]     # extra arguments are passed to the script
     environment:
       GATEWAY_URL: http://gateway:8000
       CARRIER_URL: http://carrier:9000
