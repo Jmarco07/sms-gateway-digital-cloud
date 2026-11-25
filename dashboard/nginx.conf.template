@@ -1,0 +1,20 @@
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # /api/* -> gateway /admin/*  (nginx adds the admin key, the browser never sees it)
+    location /api/ {
+        proxy_pass ${GATEWAY_URL}/admin/;
+        proxy_set_header X-Admin-Key ${ADMIN_KEY};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        # needed for Server-Sent Events: do not buffer, keep the connection open
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+}
