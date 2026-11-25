@@ -1,0 +1,120 @@
+# One command: docker compose up --build
+#
+#   gateway API + admin API   http://localhost:8000
+#   dashboard                 http://localhost:8080
+#   mock carrier              http://localhost:9000
+#
+# Demo API keys (seed data):  Acme Bank  acme-demo-key-0001
+#                             ShopFast   shopfast-demo-key-0001
+
+x-gateway-env: &gateway-env
+  DATABASE_URL: postgresql://sms:sms@postgres:5432/sms
+  REDIS_URL: redis://redis:6379/0
+  DLR_SECRET: ${DLR_SECRET:-dev-dlr-secret}
+  ADMIN_KEY: ${ADMIN_KEY:-dev-admin-key}
+  CARRIER_URL: http://carrier:9000
+  CARRIER_RPS: ${CARRIER_RPS:-45}
+  ACME_API_KEY: ${ACME_API_KEY:-acme-demo-key-0001}
+  SHOPFAST_API_KEY: ${SHOPFAST_API_KEY:-shopfast-demo-key-0001}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sms
+      POSTGRES_PASSWORD: sms
+      POSTGRES_DB: sms
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sms -d sms"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    # AOF keeps the queue across a Redis restart. Postgres is still the source of truth.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: ./gateway
+    command: ["python", "-m", "app.migrate"]
+    environment: *gateway-env
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  carrier:
+    build: ./carrier
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      DLR_SECRET: ${DLR_SECRET:-dev-dlr-secret}
+    ports: ["9000:9000"]
+
+  gateway:
+    build: ./gateway
+    environment: *gateway-env
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: ./gateway
+    command: ["python", "-m", "app.worker"]
+    environment: *gateway-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      carrier: { condition: service_started }
+
+  webhook-worker:
+    build: ./gateway
+    command: ["python", "-m", "app.webhooks"]
+    environment: *gateway-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  dashboard:
+    build: ./dashboard
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      ADMIN_KEY: ${ADMIN_KEY:-dev-admin-key}
+    ports: ["8080:80"]
+    depends_on: [gateway]
+
+  # --- tools (not started by `docker compose up`) ---------------------------
+  tests:
+    profiles: ["tools"]
+    build: ./gateway
+    command: ["pytest", "-q"]
+    environment:
+      <<: *gateway-env
+      TEST_ADMIN_DATABASE_URL: postgresql://sms:sms@postgres:5432/postgres
+      TEST_REDIS_URL: redis://redis:6379/15
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  loadtest:
+    profiles: ["tools"]
+    build: ./gateway
+    command: ["python", "/loadtest/load.py"]
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      CARRIER_URL: http://carrier:9000
+      ACME_API_KEY: ${ACME_API_KEY:-acme-demo-key-0001}
+      SHOPFAST_API_KEY: ${SHOPFAST_API_KEY:-shopfast-demo-key-0001}
+    volumes: ["./loadtest:/loadtest:ro"]
+    depends_on: [gateway]
+
+volumes:
+  pgdata:
+  redisdata:
