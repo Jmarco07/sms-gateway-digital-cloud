@@ -208,5 +208,5 @@ DESIGN.md              the design note
 
 ## AI usage
 
-This project was built with an AI coding assistant (Kiro). The complete session transcript is submitted with it as
-`AI_TRANSCRIPT.md`. I can explain and change any part of the code live.
+This project was built with an AI coding assistant (Kiro). The full session transcript is provided separately
+with the submission. I can explain and change any part of the code live.
